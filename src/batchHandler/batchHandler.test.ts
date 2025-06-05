@@ -1,39 +1,25 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-  BatchHandler,
-  BatchConfig,
-  BatchResult,
-} from '@/batchHandler/batchHandler';
+import { describe, it, expect, vi } from 'vitest';
+import { BatchHandler } from '@/batchHandler/batchHandler';
 import { SharedData } from '@/baseHandler/baseHandler';
 
 interface TestBatchData extends SharedData {
   items?: string[];
   results?: string[];
   processedCount?: number;
-  errorCount?: number;
 }
 
 class TestBatchHandler extends BatchHandler<string, string, TestBatchData> {
-  public handleSingleItemSpy = vi.fn();
-  public handleItemErrorSpy = vi.fn();
-
-  constructor(config?: BatchConfig) {
-    super(config);
-  }
+  public processSingleItemSpy = vi.fn();
 
   protected prepareBatchInputs(sharedData: Readonly<TestBatchData>): string[] {
     return sharedData.items || [];
   }
 
-  protected async handleSingleItem(item: string): Promise<string> {
-    this.handleSingleItemSpy(item);
+  protected async processSingleItem(item: string): Promise<string> {
+    this.processSingleItemSpy(item);
 
     if (item === 'fail') {
       throw new Error(`Failed to process: ${item}`);
-    }
-
-    if (item === 'slow') {
-      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     return `processed:${item}`;
@@ -42,66 +28,15 @@ class TestBatchHandler extends BatchHandler<string, string, TestBatchData> {
   protected processBatchResults(
     sharedData: TestBatchData & SharedData,
     inputs: string[],
-    outputs: BatchResult<string>,
+    outputs: string[],
   ): string {
-    sharedData.results = outputs.results;
-    sharedData.processedCount = outputs.successful;
-    sharedData.errorCount = outputs.failed;
-
-    if (outputs.failed === 0) return 'all_success';
-    if (outputs.successful === 0) return 'all_failed';
-    return 'partial_success';
-  }
-
-  protected handleItemError(item: string, error: Error): string {
-    this.handleItemErrorSpy(item, error);
-
-    if (item === 'recoverable') {
-      return `fallback:${item}`;
-    }
-
-    throw error;
+    sharedData.results = outputs;
+    sharedData.processedCount = outputs.length;
+    return 'complete';
   }
 }
 
 describe('BatchHandler', () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe('Constructor and Configuration', () => {
-    it('should use default config if none provided', () => {
-      const handler = new TestBatchHandler();
-      const config = handler.getBatchConfig();
-
-      expect(config).toEqual({
-        maxConcurrency: 1,
-        failFast: true,
-        retryDelayMs: 0,
-        maxRetries: 1,
-      });
-    });
-
-    it('should use provided config', () => {
-      const handler = new TestBatchHandler({
-        maxConcurrency: 3,
-        failFast: false,
-        retryDelayMs: 100,
-        maxRetries: 2,
-      });
-
-      const config = handler.getBatchConfig();
-      expect(config.maxConcurrency).toBe(3);
-      expect(config.failFast).toBe(false);
-      expect(config.retryDelayMs).toBe(100);
-      expect(config.maxRetries).toBe(2);
-    });
-  });
-
   describe('Basic Batch Processing', () => {
     it('should process empty batch', async () => {
       const handler = new TestBatchHandler();
@@ -109,23 +44,21 @@ describe('BatchHandler', () => {
 
       const action = await handler.run(sharedData);
 
-      expect(action).toBe('all_success');
+      expect(action).toBe('complete');
       expect(sharedData.results).toEqual([]);
       expect(sharedData.processedCount).toBe(0);
-      expect(sharedData.errorCount).toBe(0);
     });
 
-    it('should process single item successfully', async () => {
+    it('should process single item', async () => {
       const handler = new TestBatchHandler();
       const sharedData: TestBatchData = { items: ['item1'] };
 
       const action = await handler.run(sharedData);
 
-      expect(action).toBe('all_success');
+      expect(action).toBe('complete');
       expect(sharedData.results).toEqual(['processed:item1']);
       expect(sharedData.processedCount).toBe(1);
-      expect(sharedData.errorCount).toBe(0);
-      expect(handler.handleSingleItemSpy).toHaveBeenCalledWith('item1');
+      expect(handler.processSingleItemSpy).toHaveBeenCalledWith('item1');
     });
 
     it('should process multiple items sequentially', async () => {
@@ -134,207 +67,103 @@ describe('BatchHandler', () => {
 
       const action = await handler.run(sharedData);
 
-      expect(action).toBe('all_success');
+      expect(action).toBe('complete');
       expect(sharedData.results).toEqual([
         'processed:item1',
         'processed:item2',
         'processed:item3',
       ]);
       expect(sharedData.processedCount).toBe(3);
-      expect(sharedData.errorCount).toBe(0);
+      expect(handler.processSingleItemSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('should handle undefined items array', async () => {
+      const handler = new TestBatchHandler();
+      const sharedData: TestBatchData = {}; // No items array
+
+      const action = await handler.run(sharedData);
+
+      expect(action).toBe('complete');
+      expect(sharedData.results).toEqual([]);
+      expect(sharedData.processedCount).toBe(0);
     });
   });
 
   describe('Error Handling', () => {
-    it('should handle single item failure with failFast=true', async () => {
-      const handler = new TestBatchHandler({ failFast: true });
+    it('should propagate errors from individual items', async () => {
+      const handler = new TestBatchHandler();
       const sharedData: TestBatchData = { items: ['item1', 'fail', 'item3'] };
 
-      const action = await handler.run(sharedData);
-
-      expect(action).toBe('partial_success');
-      expect(sharedData.results).toEqual(['processed:item1']); // Stopped after failure
-      expect(sharedData.processedCount).toBe(1);
-      expect(sharedData.errorCount).toBe(1);
-    });
-
-    it('should continue processing with failFast=false', async () => {
-      const handler = new TestBatchHandler({ failFast: false });
-      const sharedData: TestBatchData = { items: ['item1', 'fail', 'item3'] };
-
-      const action = await handler.run(sharedData);
-
-      expect(action).toBe('partial_success');
-      expect(sharedData.results).toEqual([
-        'processed:item1',
-        'processed:item3',
-      ]);
-      expect(sharedData.processedCount).toBe(2);
-      expect(sharedData.errorCount).toBe(1);
-    });
-
-    it('should use error handler fallback when available', async () => {
-      const handler = new TestBatchHandler({ failFast: false });
-      const sharedData: TestBatchData = {
-        items: ['item1', 'recoverable', 'item3'],
-      };
-
-      const action = await handler.run(sharedData);
-
-      expect(action).toBe('all_success');
-      expect(sharedData.results).toEqual([
-        'processed:item1',
-        'fallback:recoverable',
-        'processed:item3',
-      ]);
-      expect(sharedData.processedCount).toBe(3);
-      expect(sharedData.errorCount).toBe(0);
-      expect(handler.handleItemErrorSpy).toHaveBeenCalledWith(
-        'recoverable',
-        expect.any(Error),
+      await expect(handler.run(sharedData)).rejects.toThrow(
+        'Failed to process: fail',
       );
     });
 
-    it('should return all_failed when all items fail', async () => {
-      const handler = new TestBatchHandler({ failFast: false });
-      const sharedData: TestBatchData = { items: ['fail', 'fail', 'fail'] };
+    it('should stop processing on first error', async () => {
+      const handler = new TestBatchHandler();
+      const sharedData: TestBatchData = { items: ['item1', 'fail', 'item3'] };
 
-      const action = await handler.run(sharedData);
-
-      expect(action).toBe('all_failed');
-      expect(sharedData.results).toEqual([]);
-      expect(sharedData.processedCount).toBe(0);
-      expect(sharedData.errorCount).toBe(3);
+      try {
+        await handler.run(sharedData);
+      } catch (error) {
+        expect(handler.processSingleItemSpy).toHaveBeenCalledWith('item1');
+        expect(handler.processSingleItemSpy).toHaveBeenCalledWith('fail');
+        expect(handler.processSingleItemSpy).not.toHaveBeenCalledWith('item3');
+      }
     });
   });
 
-  describe('Retry Logic', () => {
-    it('should retry failed items up to maxRetries', async () => {
-      let attempts = 0;
+  describe('Conditional Routing', () => {
+    it('should support routing based on batch results', async () => {
+      class RoutingBatchHandler extends TestBatchHandler {
+        protected processBatchResults(
+          sharedData: TestBatchData & SharedData,
+          inputs: string[],
+          outputs: string[],
+        ): string {
+          sharedData.results = outputs;
+          sharedData.processedCount = outputs.length;
 
-      class RetryBatchHandler extends TestBatchHandler {
-        protected async handleSingleItem(item: string): Promise<string> {
-          if (item === 'retry-item') {
-            attempts++;
-            if (attempts < 3) throw new Error('Retry needed');
-          }
-          return `processed:${item}`;
+          if (outputs.length === 0) return 'empty';
+          if (outputs.length === 1) return 'single';
+          return 'multiple';
         }
       }
 
-      const handler = new RetryBatchHandler({ maxRetries: 3 });
-      const sharedData: TestBatchData = { items: ['retry-item'] };
+      const handler = new RoutingBatchHandler();
 
-      const action = await handler.run(sharedData);
+      const emptyData: TestBatchData = { items: [] };
+      expect(await handler.run(emptyData)).toBe('empty');
 
-      expect(action).toBe('all_success');
-      expect(attempts).toBe(3);
-      expect(sharedData.results).toEqual(['processed:retry-item']);
-    });
+      const singleData: TestBatchData = { items: ['item1'] };
+      expect(await handler.run(singleData)).toBe('single');
 
-    it('should delay between retries if configured', async () => {
-      vi.useFakeTimers();
-      let attempts = 0;
-
-      class DelayRetryHandler extends TestBatchHandler {
-        protected async handleSingleItem(item: string): Promise<string> {
-          if (item === 'delay-item') {
-            attempts++;
-            if (attempts < 2) throw new Error('Delay retry');
-          }
-          return `processed:${item}`;
-        }
-      }
-
-      const handler = new DelayRetryHandler({
-        maxRetries: 2,
-        retryDelayMs: 100,
-      });
-      const sharedData: TestBatchData = { items: ['delay-item'] };
-
-      const promise = handler.run(sharedData);
-
-      // First attempt should happen immediately
-      await vi.advanceTimersByTimeAsync(0);
-      expect(attempts).toBe(1);
-
-      // Second attempt after delay
-      await vi.advanceTimersByTimeAsync(100);
-      await promise;
-
-      expect(attempts).toBe(2);
-      expect(sharedData.results).toEqual(['processed:delay-item']);
-
-      vi.useRealTimers();
+      const multipleData: TestBatchData = { items: ['item1', 'item2'] };
+      expect(await handler.run(multipleData)).toBe('multiple');
     });
   });
 
-  describe('Concurrent Processing', () => {
-    it('should process items concurrently when maxConcurrency > 1', async () => {
-      const handler = new TestBatchHandler({ maxConcurrency: 2 });
-      const sharedData: TestBatchData = { items: ['slow', 'slow', 'item3'] };
-
-      const startTime = Date.now();
-      const action = await handler.run(sharedData);
-      const endTime = Date.now();
-
-      expect(action).toBe('all_success');
-      expect(sharedData.results).toEqual([
-        'processed:slow',
-        'processed:slow',
-        'processed:item3',
-      ]);
-
-      // Should be faster than sequential (less than 150ms vs 150ms+ for sequential)
-      expect(endTime - startTime).toBeLessThan(120);
-    });
-
-    it('should respect concurrency limits', async () => {
-      const processing = new Set<string>();
-      const maxConcurrent = { value: 0 };
-
-      class ConcurrencyTestHandler extends TestBatchHandler {
-        protected async handleSingleItem(item: string): Promise<string> {
-          processing.add(item);
-          maxConcurrent.value = Math.max(maxConcurrent.value, processing.size);
-
-          await new Promise((resolve) => setTimeout(resolve, 50));
-
-          processing.delete(item);
-          return `processed:${item}`;
+  describe('Async Processing', () => {
+    it('should handle async item processing', async () => {
+      class AsyncBatchHandler extends TestBatchHandler {
+        protected async processSingleItem(item: string): Promise<string> {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          return `async:${item}`;
         }
       }
 
-      const handler = new ConcurrencyTestHandler({ maxConcurrency: 2 });
-      const sharedData: TestBatchData = {
-        items: ['item1', 'item2', 'item3', 'item4'],
-      };
-
-      await handler.run(sharedData);
-
-      expect(maxConcurrent.value).toBe(2); // Should never exceed maxConcurrency
-    });
-
-    it('should handle concurrent failures with failFast=true', async () => {
-      const handler = new TestBatchHandler({
-        maxConcurrency: 3,
-        failFast: true,
-      });
-      const sharedData: TestBatchData = {
-        items: ['item1', 'fail', 'item3', 'item4'],
-      };
+      const handler = new AsyncBatchHandler();
+      const sharedData: TestBatchData = { items: ['item1', 'item2'] };
 
       const action = await handler.run(sharedData);
 
-      expect(action).toBe('partial_success');
-      expect(sharedData.errorCount).toBe(1);
-      // Due to concurrency, some items might have been processed before failure was detected
-      expect(sharedData.processedCount).toBeGreaterThanOrEqual(1);
+      expect(action).toBe('complete');
+      expect(sharedData.results).toEqual(['async:item1', 'async:item2']);
     });
   });
 
   describe('Parameter Management', () => {
-    it('should merge batch handler parameters into shared data', async () => {
+    it('should merge parameters into shared data', async () => {
       const handler = new TestBatchHandler();
       handler.setParams({
         batchSize: 100,
@@ -349,74 +178,109 @@ describe('BatchHandler', () => {
     });
   });
 
-  describe('Integration with Pipeline', () => {
-    it('should work as a handler in a pipeline', async () => {
-      // This would be tested with actual Pipeline integration
-      const handler = new TestBatchHandler();
-      const sharedData: TestBatchData = { items: ['item1', 'item2'] };
+  describe('Integration Patterns', () => {
+    it('should work with different input/output types', async () => {
+      interface NumberBatchData extends SharedData {
+        numbers: number[];
+        squares?: number[];
+      }
 
-      const action = await handler.run(sharedData);
+      class SquareBatchHandler extends BatchHandler<
+        number,
+        number,
+        NumberBatchData
+      > {
+        protected prepareBatchInputs(
+          sharedData: Readonly<NumberBatchData>,
+        ): number[] {
+          return sharedData.numbers;
+        }
 
-      expect(action).toBe('all_success');
-      expect(sharedData.results).toEqual([
-        'processed:item1',
-        'processed:item2',
-      ]);
-    });
+        protected processSingleItem(num: number): number {
+          return num * num;
+        }
 
-    it('should support different routing based on batch results', async () => {
-      const handler = new TestBatchHandler({ failFast: false });
-
-      // Test all success
-      const allSuccessData: TestBatchData = { items: ['item1', 'item2'] };
-      expect(await handler.run(allSuccessData)).toBe('all_success');
-
-      // Test partial success
-      const partialSuccessData: TestBatchData = { items: ['item1', 'fail'] };
-      expect(await handler.run(partialSuccessData)).toBe('partial_success');
-
-      // Test all failed
-      const allFailedData: TestBatchData = { items: ['fail', 'fail'] };
-      expect(await handler.run(allFailedData)).toBe('all_failed');
-    });
-  });
-
-  describe('Edge Cases', () => {
-    it('should handle undefined or null items array', async () => {
-      const handler = new TestBatchHandler();
-      const sharedData: TestBatchData = {}; // No items array
-
-      const action = await handler.run(sharedData);
-
-      expect(action).toBe('all_success');
-      expect(sharedData.results).toEqual([]);
-      expect(sharedData.processedCount).toBe(0);
-    });
-
-    it('should handle async errors in concurrent processing', async () => {
-      class AsyncErrorHandler extends TestBatchHandler {
-        protected async handleSingleItem(item: string): Promise<string> {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-          if (item === 'async-fail') {
-            throw new Error('Async processing failed');
-          }
-          return `processed:${item}`;
+        protected processBatchResults(
+          sharedData: NumberBatchData & SharedData,
+          inputs: number[],
+          outputs: number[],
+        ): string {
+          sharedData.squares = outputs;
+          return 'squared';
         }
       }
 
-      const handler = new AsyncErrorHandler({
-        maxConcurrency: 2,
-        failFast: false,
-      });
-      const sharedData: TestBatchData = {
-        items: ['item1', 'async-fail', 'item3'],
+      const handler = new SquareBatchHandler();
+      const sharedData: NumberBatchData = { numbers: [1, 2, 3, 4] };
+
+      const action = await handler.run(sharedData);
+
+      expect(action).toBe('squared');
+      expect(sharedData.squares).toEqual([1, 4, 9, 16]);
+    });
+
+    it('should support complex object transformations', async () => {
+      interface User {
+        id: number;
+        name: string;
+        email: string;
+      }
+
+      interface ProcessedUser {
+        id: number;
+        displayName: string;
+        emailDomain: string;
+      }
+
+      interface UserBatchData extends SharedData {
+        users: User[];
+        processedUsers?: ProcessedUser[];
+      }
+
+      class UserProcessor extends BatchHandler<
+        User,
+        ProcessedUser,
+        UserBatchData
+      > {
+        protected prepareBatchInputs(
+          sharedData: Readonly<UserBatchData>,
+        ): User[] {
+          return sharedData.users;
+        }
+
+        protected processSingleItem(user: User): ProcessedUser {
+          return {
+            id: user.id,
+            displayName: user.name.toUpperCase(),
+            emailDomain: user.email.split('@')[1],
+          };
+        }
+
+        protected processBatchResults(
+          sharedData: UserBatchData & SharedData,
+          inputs: User[],
+          outputs: ProcessedUser[],
+        ): string {
+          sharedData.processedUsers = outputs;
+          return 'users_processed';
+        }
+      }
+
+      const handler = new UserProcessor();
+      const sharedData: UserBatchData = {
+        users: [
+          { id: 1, name: 'John', email: 'john@example.com' },
+          { id: 2, name: 'Jane', email: 'jane@test.org' },
+        ],
       };
 
       const action = await handler.run(sharedData);
 
-      expect(action).toBe('partial_success');
-      expect(sharedData.processedCount).toBe(2);
-      expect(sharedData.errorCount).toBe(1);
+      expect(action).toBe('users_processed');
+      expect(sharedData.processedUsers).toEqual([
+        { id: 1, displayName: 'JOHN', emailDomain: 'example.com' },
+        { id: 2, displayName: 'JANE', emailDomain: 'test.org' },
+      ]);
     });
   });
 });

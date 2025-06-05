@@ -381,7 +381,7 @@ const result = await llmWorkflow.run({
 
 ## What Pipeline Does NOT Provide
 
-In keeping with PocketFlow's minimalism, Pipeline intentionally omits:
+Pipeline intentionally omits:
 
 - ❌ **Statistics or monitoring** - Build your own if needed
 - ❌ **Visualization tools** - Manual graph inspection only

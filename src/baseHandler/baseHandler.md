@@ -418,8 +418,6 @@ class DocumentedHandler extends BaseHandler<Input, Output, Data> {
 
 ## Zero Dependencies Philosophy
 
-BaseHandler follows PocketFlow's zero-dependency principle:
-
 - **No external packages**: Only uses TypeScript/JavaScript standard library
 - **Vendor agnostic**: No assumptions about LLM providers, databases, or services
 - **AI-friendly**: Simple enough for AI assistants to understand and generate reliable code
