@@ -7,7 +7,17 @@ export interface HandlerParams {
 }
 
 export type ActionResult = string;
-export type SuccessorMap = Map<ActionResult, BaseHandler>;
+export type SuccessorMap = Map<
+  ActionResult,
+  BaseHandler<unknown, unknown, SharedData>
+>;
+
+// Type-only import to avoid circular dependency
+export interface ConditionalTransition {
+  then(
+    targetHandler: BaseHandler<unknown, unknown, SharedData>,
+  ): BaseHandler<unknown, unknown, SharedData>;
+}
 
 /**
  * BaseHandler provides the minimal foundation for BOBA-T's workflow system.
@@ -31,14 +41,15 @@ export abstract class BaseHandler<
   private readonly params: HandlerParams = {};
   private readonly successors: SuccessorMap = new Map<
     ActionResult,
-    BaseHandler
+    BaseHandler<unknown, unknown, SharedData>
   >();
 
   // ========================================
   // PARAMETER MANAGEMENT
   // ========================================
-  public setParams(newParams: HandlerParams): void {
+  public setParams(newParams: HandlerParams): this {
     Object.assign(this.params as Record<string, unknown>, newParams);
+    return this;
   }
 
   public getParams(): Readonly<HandlerParams> {
@@ -49,18 +60,55 @@ export abstract class BaseHandler<
   // CONNECTION MANAGEMENT
   // ========================================
   public connectTo(
-    handler: BaseHandler,
+    handler: BaseHandler<unknown, unknown, SharedData>,
     action: ActionResult = 'default',
-  ): BaseHandler {
+  ): BaseHandler<unknown, unknown, SharedData> {
     this.successors.set(action, handler);
     return handler;
   }
 
-  public getNextHandler(action: ActionResult): BaseHandler | undefined {
+  /**
+   * Fluent interface for chaining - connects and returns this handler for further chaining
+   */
+  public chain(
+    handler: BaseHandler<unknown, unknown, SharedData>,
+    action: ActionResult = 'default',
+  ): this {
+    this.connectTo(handler, action);
+    return this;
+  }
+
+  /**
+   * Pipeline-style chaining operator for connecting handlers sequentially
+   * Connects this handler to the target handler with default action
+   */
+  public pipe(
+    handler: BaseHandler<unknown, unknown, SharedData>,
+  ): BaseHandler<unknown, unknown, SharedData> {
+    return this.connectTo(handler, 'default');
+  }
+
+  /**
+   * Conditional chaining - creates a conditional transition for the specified action
+   */
+  public when(action: ActionResult): ConditionalTransition {
+    return {
+      then: (targetHandler: BaseHandler<unknown, unknown, SharedData>) => {
+        return this.connectTo(targetHandler, action);
+      },
+    };
+  }
+
+  public getNextHandler(
+    action: ActionResult,
+  ): BaseHandler<unknown, unknown, SharedData> | undefined {
     return this.successors.get(action);
   }
 
-  public getSuccessors(): ReadonlyMap<ActionResult, BaseHandler> {
+  public getSuccessors(): ReadonlyMap<
+    ActionResult,
+    BaseHandler<unknown, unknown, SharedData>
+  > {
     return new Map(this.successors);
   }
 
@@ -70,6 +118,35 @@ export abstract class BaseHandler<
 
   public getAvailableActions(): readonly ActionResult[] {
     return Array.from(this.successors.keys());
+  }
+
+  public next(
+    handler: BaseHandler<unknown, unknown, SharedData>,
+  ): BaseHandler<unknown, unknown, SharedData> {
+    this.connectTo(handler);
+    return handler;
+  }
+
+  public on(
+    action: ActionResult,
+    handler: BaseHandler<unknown, unknown, SharedData>,
+  ): this {
+    if (this.successors.has(action)) {
+      console.warn(`Overwriting successor for action '${action}'`);
+    }
+    this.connectTo(handler, action);
+    return this;
+  }
+
+  public clone(): this {
+    const clonedHandler = Object.create(Object.getPrototypeOf(this));
+    Object.assign(clonedHandler, this);
+
+    // Deep clone the parameters and successors
+    clonedHandler.params = { ...this.params };
+    clonedHandler.successors = new Map(this.successors);
+
+    return clonedHandler;
   }
 
   // ========================================
@@ -133,6 +210,11 @@ export abstract class BaseHandler<
   public async run(
     sharedData: TSharedData & SharedData,
   ): Promise<ActionResult> {
+    // Warn if handler has successors but is being run standalone
+    if (this.hasSuccessors()) {
+      console.warn("Handler won't run successors. Use Pipeline.");
+    }
+
     Object.assign(sharedData, this.params);
 
     return this.executeLifecycle(sharedData);
