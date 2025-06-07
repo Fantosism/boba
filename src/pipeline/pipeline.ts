@@ -15,16 +15,22 @@ import {
  * - Maintain shared data throughout execution
  *
  */
-export class Pipeline extends BaseHandler<void, ActionResult, SharedData> {
+export class Pipeline<
+  TStartHandler extends BaseHandler<unknown, unknown, SharedData> = BaseHandler<
+    unknown,
+    unknown,
+    SharedData
+  >,
+> extends BaseHandler<void, ActionResult, SharedData> {
   // ========================================
   // PRIVATE FIELDS
   // ========================================
-  private readonly startHandler: BaseHandler;
+  private readonly startHandler: TStartHandler;
 
   // ========================================
   // CONSTRUCTOR
   // ========================================
-  constructor(startHandler: BaseHandler) {
+  constructor(startHandler: TStartHandler) {
     super();
 
     if (!startHandler) {
@@ -37,20 +43,82 @@ export class Pipeline extends BaseHandler<void, ActionResult, SharedData> {
   // ========================================
   // PIPELINE-SPECIFIC METHODS
   // ========================================
-  public getStartHandler(): BaseHandler {
+  public getStartHandler(): BaseHandler<unknown, unknown, SharedData> {
     return this.startHandler;
+  }
+
+  // ========================================
+  // METHOD CHAINING SUPPORT
+  // ========================================
+
+  /**
+   * Connect this pipeline to another handler with a specific action.
+   * Returns the target handler for further chaining.
+   *
+   * This enables: pipeline.on("success", nextHandler).on("failure", errorHandler)
+   */
+  public on(
+    action: ActionResult,
+    handler: BaseHandler<unknown, unknown, SharedData>,
+  ): this {
+    super.on(action, handler);
+    return this;
+  }
+
+  /**
+   * Connect this pipeline to another handler with default action.
+   * Returns the target handler for linear chaining.
+   *
+   * This enables: pipeline.next(handlerB).next(handlerC)
+   */
+  public next(
+    handler: BaseHandler<unknown, unknown, SharedData>,
+  ): BaseHandler<unknown, unknown, SharedData> {
+    return super.next(handler);
+  }
+
+  /**
+   * Pipeline-style chaining operator for connecting pipelines sequentially.
+   * Returns the target handler for further chaining.
+   *
+   * This enables: pipelineA.pipe(pipelineB).pipe(handlerC)
+   */
+  public pipe(
+    handler: BaseHandler<unknown, unknown, SharedData>,
+  ): BaseHandler<unknown, unknown, SharedData> {
+    return super.pipe(handler);
+  }
+
+  /**
+   * Conditional chaining - creates a conditional transition for the specified action.
+   *
+   * This enables: pipeline.when("approved").then(approvalHandler)
+   */
+  public when(action: ActionResult) {
+    return super.when(action);
   }
 
   // ========================================
   // CORE ORCHESTRATION LOGIC
   // ========================================
   private async orchestrate(sharedData: SharedData): Promise<ActionResult> {
-    let currentHandler: BaseHandler | undefined = this.startHandler;
+    let currentHandler: BaseHandler<unknown, unknown, SharedData> | undefined =
+      this.startHandler;
     let lastAction: ActionResult = 'default';
 
     while (currentHandler) {
       lastAction = await currentHandler.run(sharedData);
-      currentHandler = currentHandler.getNextHandler(lastAction);
+      const nextHandler = currentHandler.getNextHandler(lastAction);
+
+      // Warn if action not found but handler has successors
+      if (!nextHandler && currentHandler.hasSuccessors()) {
+        const availableActions = currentHandler.getAvailableActions();
+        console.warn(
+          `Flow ends: '${lastAction}' not found in [${availableActions.join(', ')}]`,
+        );
+      }
+
+      currentHandler = nextHandler;
     }
 
     return lastAction;

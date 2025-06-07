@@ -1,4 +1,38 @@
 {
+  "name": "boba-t",
+  "version": "1.0.0",
+  "description": "A TypeScript framework for building composable data processing pipelines with handlers",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "typescript",
+    "pipeline",
+    "data-processing",
+    "handlers",
+    "batch-processing",
+    "async",
+    "framework"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.28.0",
     "@types/node": "^22.15.29",
@@ -10,11 +44,13 @@
     "eslint-plugin-prettier": "^5.4.1",
     "prettier": "^3.5.3",
     "ts-node": "^10.9.2",
+    "tsup": "^8.4.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.33.1",
     "vitest": "^3.2.1"
   },
   "scripts": {
+    "build": "tsup",
     "start": "npx ts-node index.ts",
     "eslint-check-only": "npx eslint .",
     "eslint-fix": "npx eslint . --fix",

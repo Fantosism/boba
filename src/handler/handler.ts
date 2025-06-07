@@ -28,6 +28,7 @@ export abstract class Handler<
   // PROTECTED FIELDS (for testing access)
   // ========================================
   protected readonly config: Required<HandlerConfig>;
+  protected currentRetry: number = 0;
 
   // ========================================
   // CONSTRUCTOR
@@ -53,16 +54,23 @@ export abstract class Handler<
   private async executeWithRetry(inputs: TInput): Promise<TOutput> {
     let lastError: Error | undefined;
 
-    for (let attempt = 0; attempt < this.config.maxRetries; attempt++) {
+    for (
+      this.currentRetry = 0;
+      this.currentRetry < this.config.maxRetries;
+      this.currentRetry++
+    ) {
       try {
         const result: TOutput = await this.handleRequest(inputs);
+        this.currentRetry = 0; // Reset on success
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
         // If this is the last attempt, use error handler
-        if (attempt === this.config.maxRetries - 1) {
-          return this.handleError(inputs, lastError);
+        if (this.currentRetry === this.config.maxRetries - 1) {
+          const fallbackResult = this.handleError(inputs, lastError);
+          this.currentRetry = 0; // Reset after final attempt
+          return fallbackResult;
         }
 
         // Wait before retrying if configured
@@ -75,6 +83,7 @@ export abstract class Handler<
     }
 
     // This should never be reached due to the loop logic, but TypeScript needs it
+    this.currentRetry = 0; // Reset on unexpected exit
     throw (
       lastError ?? new Error('Unknown error occurred during retry execution')
     );
@@ -94,5 +103,16 @@ export abstract class Handler<
       outputs,
     );
     return action;
+  }
+
+  // ========================================
+  // UTILITY METHODS
+  // ========================================
+
+  /**
+   * Get the handler configuration
+   */
+  public getConfig(): Readonly<HandlerConfig> {
+    return { ...this.config };
   }
 }
