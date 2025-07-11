@@ -107,7 +107,7 @@ export class Pipeline<
     let lastAction: ActionResult = 'default';
 
     while (currentHandler) {
-      lastAction = await currentHandler.run(sharedData);
+      lastAction = await currentHandler.run(sharedData, true);
       const nextHandler = currentHandler.getNextHandler(lastAction);
 
       // Warn if action not found but handler has successors

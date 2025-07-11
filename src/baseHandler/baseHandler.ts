@@ -209,9 +209,10 @@ export abstract class BaseHandler<
    */
   public async run(
     sharedData: TSharedData & SharedData,
+    isOrchestrated = false,
   ): Promise<ActionResult> {
-    // Warn if handler has successors but is being run standalone
-    if (this.hasSuccessors()) {
+    // Warn if handler has successors but is being run standalone (not orchestrated)
+    if (this.hasSuccessors() && !isOrchestrated) {
       console.warn("Handler won't run successors. Use Pipeline.");
     }
 
