@@ -1,6 +1,6 @@
 {
   "name": "boba-t",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A TypeScript framework for building composable data processing pipelines with handlers",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
